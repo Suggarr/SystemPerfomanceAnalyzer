@@ -8,11 +8,14 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QLabel, QVBoxLayout, QTableWidget, QTableWidgetItem, QMenu, QWidget, QDialog, QTabWidget
 )
+from gi.repository import Gio
 from os import popen
 from PySide6.QtGui import QAction, QIcon
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
+gio_apps = Gio.AppInfo.get_all()
+theme_icon_list = ['utilities-system-monitor', 'application-x-executable', 'system-run', 'system-task']
 
 class CPUResourceTab(QWidget):
     def __init__(self):
@@ -171,65 +174,21 @@ class ProcessTab(QWidget):
         # Timer to update processes periodically
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_processes)
-        self.timer.start(2000)  # Update every 2 seconds
+        self.timer.start(1500)  # Update every 1 second
 
     def setup_table(self):
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Icon", "PID", "Name", "CPU Usage (%)", "Memory Usage (%)", "User"])
+        self.table.setColumnCount(5)  # We now have 5 columns
+        self.table.setHorizontalHeaderLabels(["Process", "PID", "CPU Usage (%)", "Memory Usage (%)", "User"])
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
-        self.table.setColumnWidth(0, 32)  # Width for icons
+        self.table.setColumnWidth(0, 180)  # Width for icon and name
+        self.table.setColumnWidth(1, 80)   # Width for PID
+        self.table.setColumnWidth(2, 150)  # Width for CPU Usage
+        self.table.setColumnWidth(3, 150)  # Width for Memory Usage
+        self.table.setColumnWidth(4, 150)  # Width for User
 
-    def update_processes(self):
-        self.table.setRowCount(0)
-        processes = []
-
-        for proc in psutil.process_iter(['pid', 'name', 'username', 'memory_percent', 'cpu_percent', 'exe']):
-            try:
-                processes.append(proc)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-
-        # Sort processes by CPU usage in descending order
-        processes.sort(key=lambda p: p.cpu_percent(), reverse=True)
-
-        for proc in processes:
-            try:
-                row_position = self.table.rowCount()
-                self.table.insertRow(row_position)
-
-                # Retrieve icon
-                icon = self.get_process_icon(proc.info['exe'], proc.info['name'])
-                icon_item = QTableWidgetItem()  # Create a QTableWidgetItem
-                icon_item.setIcon(icon)  # Set the icon
-                icon_item.setFlags(Qt.ItemIsEnabled)  # Make the icon item non-editable
-                self.table.setItem(row_position, 0, icon_item)
-
-                self.table.setItem(row_position, 1, QTableWidgetItem(str(proc.info['pid'])))
-                self.table.setItem(row_position, 2, QTableWidgetItem(proc.info['name']))
-                self.table.setItem(row_position, 3, QTableWidgetItem(f"{proc.info['cpu_percent']}%"))
-                self.table.setItem(row_position, 4, QTableWidgetItem(f"{proc.info['memory_percent']:.2f}%"))
-                self.table.setItem(row_position, 5, QTableWidgetItem(proc.info['username']))
-
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-
-    def get_process_icon(self, exe_path, process_name):
-        # Get the icon for the process executable
-        try:
-            if exe_path:
-                icon = QIcon(exe_path)  # Attempt to retrieve icon from the executable path
-                if not icon.isNull():
-                    return icon
-        except Exception as e:
-            print(f"Could not retrieve icon for {exe_path}: {e}")
-
-        # Fall back to theme icon if executable icon is not found
-        icon = QIcon.fromTheme(process_name.lower())
-        if not icon.isNull():
-            return icon
-
-        return QIcon()  # Return a default icon if there's an error
+        # Set the selection behavior to select full rows
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
 
     def show_context_menu(self, pos):
         item = self.table.itemAt(pos)
@@ -244,11 +203,66 @@ class ProcessTab(QWidget):
         pid = int(self.table.item(item.row(), 1).text())
         try:
             p = psutil.Process(pid)
-            p.terminate()  # Or p.kill() for forced termination
+            p.terminate()  # Or use p.kill() for forced termination
             self.update_processes()  # Refresh the table
         except Exception as e:
             print(f"Ошибка завершения процесса {pid}: {e}")
+    
+    def update_processes(self):
+        self.table.setRowCount(0)
+        processes = []
 
+        for proc in psutil.process_iter(['pid', 'name', 'username', 'memory_percent', 'cpu_percent']):
+            try:
+                processes.append(proc)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        # Sort processes by CPU usage in descending order
+        processes.sort(key=lambda p: p.cpu_percent(), reverse=True)
+
+        for proc in processes:
+            try:
+                row_position = self.table.rowCount()
+                self.table.insertRow(row_position)
+
+                # Retrieve icon and process name
+                icon = self.get_process_icon(proc)
+                icon_item = QTableWidgetItem(proc.info['name'])
+                icon_item.setIcon(icon)  # Set the icon
+                icon_item.setFlags(Qt.ItemIsEnabled)  # Make the icon item non-editable
+                self.table.setItem(row_position, 0, icon_item)
+
+                self.table.setItem(row_position, 1, QTableWidgetItem(str(proc.info['pid'])))
+                logical_cpus = psutil.cpu_count(logical=True)
+                normalized_cpu = proc.info['cpu_percent'] / logical_cpus
+                self.table.setItem(row_position, 2, QTableWidgetItem(f"{normalized_cpu:.2f}%"))
+                self.table.setItem(row_position, 3, QTableWidgetItem(f"{proc.info['memory_percent']:.2f}%"))
+                self.table.setItem(row_position, 4, QTableWidgetItem(proc.info['username']))
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+    def get_process_icon(self, process):
+        """Retrieve the icon for a given process."""
+        pname = process.name().lower()  # Приводим имя процесса к нижнему регистру
+        default_icon = QIcon.fromTheme('application-x-executable')  # Иконка по умолчанию
+
+        # Check against known applications in gio
+        for app in gio_apps:
+            app_name = app.get_display_name().lower()
+            gicon = app.get_icon()
+
+            if gicon and pname in app_name:
+                return QIcon.fromTheme(app.get_id())  # Возвращаем иконку приложения
+
+        # Check against theme icons
+        for icon in theme_icon_list:
+            if pname in icon.lower():  # Сравниваем название процесса с темами иконок
+                return QIcon.fromTheme(icon)
+
+        # Return default icon if no match was found
+        return default_icon
 
 class Ui_Dialog(object):
     def setupUi(self, Dialog):
