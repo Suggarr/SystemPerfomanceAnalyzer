@@ -3,8 +3,7 @@ import socket
 import sys
 import psutil
 import time
-import ipaddress
-import platform
+import subprocess
 from PySide6 import QtCore, QtWidgets
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
@@ -24,33 +23,41 @@ class CPUResourceTab(QWidget):
     def __init__(self):
         super().__init__()
         self.layout = QVBoxLayout(self)
-        self.cpu_usage = []
+        self.cpu_usage = [0] * 60  # 60 последних секунд
 
         # CPU Info Labels
         self.model_label = QLabel("Модель: ")
-        self.speed_label = QLabel("Макс. скорость: ")
         self.cores_label = QLabel("Ядра: ")
         self.threads_label = QLabel("Логические процессоры: ")
         self.virtualization_label = QLabel("Виртуализация: ")
+        self.sockets_label = QLabel("Сокеты: ")
+        self.l1d_label = QLabel("L1d Cache: ")
+        self.l1i_label = QLabel("L1i Cache: ")
+        self.l2_label = QLabel("L2 Cache: ")
+        self.l3_label = QLabel("L3 Cache: ")
 
         self.layout.addWidget(self.model_label)
-        self.layout.addWidget(self.speed_label)
         self.layout.addWidget(self.cores_label)
         self.layout.addWidget(self.threads_label)
         self.layout.addWidget(self.virtualization_label)
+        self.layout.addWidget(self.sockets_label)
+        self.layout.addWidget(self.l1d_label)
+        self.layout.addWidget(self.l1i_label)
+        self.layout.addWidget(self.l2_label)
+        self.layout.addWidget(self.l3_label)
 
+        # График
         self.figure = Figure()
         self.canvas = FigureCanvas(self.figure)
         self.layout.addWidget(self.canvas)
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_cpu_usage)
-        self.timer.start(500)
+        self.timer.start(1000)
 
-        self.update_cpu_info()  # Получаем информацию о процессоре
+        self.update_cpu_info()
 
     def update_cpu_info(self):
-        cpu_freq = psutil.cpu_freq()
         cpu_count = psutil.cpu_count(logical=False)
         logical_count = psutil.cpu_count(logical=True)
 
@@ -63,35 +70,65 @@ class CPUResourceTab(QWidget):
         except:
             model_name = "Не удалось получить модель"
 
-        virtualization = "Не поддерживается"
+        # Данные из lscpu
         try:
-            with open('/proc/cpuinfo', 'r') as f:
-                if "vmx" in f.read() or "svm" in f.read():
-                    virtualization = "Поддерживается"
+            output = subprocess.check_output(['lscpu'], universal_newlines=True)
+            sockets = "Неизвестно"
+            virtualization = "Не поддерживается"
+            l1d_cache = l1i_cache = l2_cache = l3_cache = "Нет данных"
+
+            for line in output.splitlines():
+                if "Сокетов:" in line:
+                    sockets = line.split(':')[1].strip()
+                elif "Тип виртуализации:" in line:
+                    virtualization = line.split(':')[1].strip()
+                elif "L1d cache:" in line:
+                    l1d_cache = line.split(':')[1].strip()
+                elif "L1i cache:" in line:
+                    l1i_cache = line.split(':')[1].strip()
+                elif "L2 cache:" in line:
+                    l2_cache = line.split(':')[1].strip()
+                elif "L3 cache:" in line:
+                    l3_cache = line.split(':')[1].strip()
         except:
-            pass
+            sockets = "Ошибка чтения"
+            virtualization = "Ошибка"
+            l1d_cache = l1i_cache = l2_cache = l3_cache = "Ошибка"
 
         self.model_label.setText(f"Модель: {model_name}")
-        self.speed_label.setText(f"Макс. скорость: {cpu_freq.max} GHz")
         self.cores_label.setText(f"Ядра: {cpu_count}")
         self.threads_label.setText(f"Логические процессоры: {logical_count}")
         self.virtualization_label.setText(f"Виртуализация: {virtualization}")
+        self.sockets_label.setText(f"Сокеты: {sockets}")
+        self.l1d_label.setText(f"Кэш L1d: {l1d_cache}")
+        self.l1i_label.setText(f"Кэщ L1i: {l1i_cache}")
+        self.l2_label.setText(f"Кэш L2: {l2_cache}")
+        self.l3_label.setText(f"Кэш L3: {l3_cache}")
 
     def update_cpu_usage(self):
         usage = psutil.cpu_percent(interval=None)
+
+        # Удаляем старое значение, добавляем новое
+        self.cpu_usage.pop(0)
         self.cpu_usage.append(usage)
 
-        if len(self.cpu_usage) > 20:
-            self.cpu_usage.pop(0)
+        self.update_graph()
 
+    def update_graph(self):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
-        ax.fill_between(range(len(self.cpu_usage)), self.cpu_usage, color='blue', alpha=0.5)
-        ax.plot(self.cpu_usage, label='CPU Usage (%)', color='blue')
+        ax.set_facecolor('white')
+
+        ax.fill_between(range(len(self.cpu_usage)), self.cpu_usage, color='lightgreen', alpha=0.5)
+        ax.plot(self.cpu_usage, label='Использование CPU (%)', color='green')
+
         ax.set_ylim(0, 100)
-        ax.set_title('Использование CPU со временем')
+        ax.set_xlim(0, len(self.cpu_usage) - 1)
+        ax.set_title('Использование CPU')
         ax.set_xlabel('Время (с)')
         ax.set_ylabel('Использование (%)')
+        ax.set_xticks(range(0, len(self.cpu_usage), 10))
+        ax.set_xticklabels(["1 мин", "50 сек", "40 сек", "30 сек", "20 сек", "10 сек"])
         ax.legend()
         ax.grid(True)
         self.canvas.draw()
@@ -101,8 +138,8 @@ class MemoryResourceTab(QWidget):
     def __init__(self):
         super().__init__()
         self.layout = QVBoxLayout(self)
-        self.memory_usage = []
-        self.time_points = []
+        self.memory_usage = [0] * 60  # храним последние 60 точек
+        self.time_labels = [str(i) for i in range(60)]  # метки времени для оси X
 
         self.memory_info_label = QLabel("Информация о памяти:")
         self.layout.addWidget(self.memory_info_label)
@@ -123,14 +160,16 @@ class MemoryResourceTab(QWidget):
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_memory_info)
-        self.timer.start(500)
+        self.timer.start(1000)
 
         self.update_memory_info()
 
     def update_memory_info(self):
         memory = psutil.virtual_memory()
+
+        # Обновляем данные: удаляем старую точку, добавляем новую
+        self.memory_usage.pop(0)
         self.memory_usage.append(memory.percent)
-        self.time_points.append(len(self.memory_usage) * 0.5)
 
         self.total_label.setText(f"Всего: {memory.total / (1024 ** 2):.2f} MB")
         self.used_label.setText(f"Используется: {memory.used / (1024 ** 2):.2f} MB")
@@ -143,12 +182,17 @@ class MemoryResourceTab(QWidget):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         ax.set_facecolor('white')
-        ax.fill_between(self.time_points, self.memory_usage, color='lightblue', alpha=0.5)
-        ax.plot(self.time_points, self.memory_usage, label='Использование памяти (%)', color='lightblue')
+
+        ax.fill_between(range(len(self.memory_usage)), self.memory_usage, color='lightblue', alpha=0.5)
+        ax.plot(self.memory_usage, label='Использование памяти (%)', color='blue')
+
         ax.set_ylim(0, 100)
-        ax.set_title('Использование памяти со временем')
+        ax.set_xlim(0, len(self.memory_usage) - 1)
+        ax.set_title('Использование памяти')
         ax.set_xlabel('Время (с)')
         ax.set_ylabel('Использование (%)')
+        ax.set_xticks(range(0, len(self.memory_usage), 10))
+        ax.set_xticklabels(["1 мин", "50 сек", "40 сек", "30 сек", "20 сек", "10 сек"])
         ax.legend()
         ax.grid(True)
         self.canvas.draw()
@@ -341,25 +385,31 @@ class NetworkResourceTab(QWidget):
         """Обновление графика сетевых скоростей."""
         self.figure.clear()
         ax = self.figure.add_subplot(111)
+        ax.set_facecolor('white')
 
         # Графики для отправки и получения данных
-        ax.plot(range(len(self.netSendArray)), self.netSendArray, label="Отправка", linestyle="--", color="blue")
-        ax.plot(range(len(self.netReceiveArray)), self.netReceiveArray, label="Получение", linestyle="-", color="green")
+        ax.plot(self.netSendArray, label="Отправка (КБ/с)", color="blue", linestyle="--")
+        ax.plot(self.netReceiveArray, label="Получение (КБ/с)", color="green", linestyle="-")
 
-        # Заливка области под графиками
         ax.fill_between(range(len(self.netSendArray)), self.netSendArray, color="blue", alpha=0.3)
         ax.fill_between(range(len(self.netReceiveArray)), self.netReceiveArray, color="green", alpha=0.3)
 
-        # Настройка клеток и меток оси X
-        ax.set_xticks(range(0, 60, 10))  # 6 колонок, каждая по 10 секунд
-        ax.set_xticklabels(["1 мин", "50 сек", "40 сек", "30 сек", "20 сек", "10 сек"])  # Метки времени под линиями
+        # Ограничения и сетка
+        max_speed = max(max(self.netSendArray), max(self.netReceiveArray), 1)
+        ax.set_ylim(0, max_speed * 1.2)
+        ax.set_xlim(0, len(self.netSendArray) - 1)
 
-        ax.set_title(f"Сетевой адаптер: {self.interface_name}")
-        ax.set_xlabel("Время (секунды)")
+        # Настройка оси X: справа налево (от старых к новым)
+        ax.set_xticks(range(0, 60, 10))
+        ax.set_xticklabels(["1 мин", "50 сек", "40 сек", "30 сек", "20 сек", "10 сек"])
+
+        # Подписи
+        ax.set_title(f"Сетевой трафик — {self.interface_name}")
+        ax.set_xlabel("Время (сек)")
         ax.set_ylabel("Скорость (КБ/с)")
+
         ax.legend()
         ax.grid(True)
-
         self.canvas.draw()
 
 class Ui_Dialog(object):
@@ -536,12 +586,16 @@ class ProcessTab(QWidget):
         self.layout.addWidget(self.table)
         self.setLayout(self.layout)
 
+        self.selected_pid = None 
+
         self.setup_table()
         self.update_processes()
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_processes)
         self.timer.start(1500)
+
+        self.selected_pid = None  # Запоминаем PID выделенного процесса
 
     def setup_table(self):
         self.table.setColumnCount(5)
@@ -555,26 +609,66 @@ class ProcessTab(QWidget):
         self.table.setColumnWidth(4, 150)
 
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.table.itemSelectionChanged.connect(self.handle_selection_change)  # Событие выбора строки
+
+    def handle_selection_change(self):
+        """Обрабатывает изменение выделения строки."""
+        current_row = self.table.currentRow()
+        if current_row != -1:  # Проверяем, что строка выделена
+            pid_item = self.table.item(current_row, 1)  # PID находится во втором столбце
+            if pid_item:
+                self.selected_pid = int(pid_item.text())  # Сохраняем PID выбранного процесса
+        else:
+            self.selected_pid = None  # Если ничего не выделено, сбрасываем PID
 
     def show_context_menu(self, pos):
-        item = self.table.itemAt(pos)
-        if item:
+        """Отображает контекстное меню."""
+        if self.selected_pid is not None:  # Проверяем, что выбран процесс
             menu = QMenu(self)
             kill_action = QAction("Завершить процесс", self)
-            kill_action.triggered.connect(lambda: self.kill_process(item))
+            kill_action.triggered.connect(self.kill_selected_process)
             menu.addAction(kill_action)
             menu.exec_(self.table.viewport().mapToGlobal(pos))
 
-    def kill_process(self, item):
-        pid = int(self.table.item(item.row(), 1).text())
-        try:
-            p = psutil.Process(pid)
-            p.terminate()
-            self.update_processes()
-        except Exception as e:
-            print(f"Ошибка завершения процесса {pid}: {e}")
+    def kill_selected_process(self):
+        """Завершает выбранный процесс с подтверждением."""
+        if self.selected_pid is not None:
+            # Получим имя процесса для показа в окне
+            process_name = None
+            try:
+                process_name = psutil.Process(self.selected_pid).name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                process_name = "Неизвестный процесс"
+            
+            # Окно подтверждения
+            confirmation = QtWidgets.QMessageBox()
+            confirmation.setIcon(QtWidgets.QMessageBox.Warning)
+            confirmation.setWindowTitle("Подтверждение завершения")
+            confirmation.setText(f"Вы действительно хотите завершить процесс `{process_name}` (PID: {self.selected_pid})?")
+            confirmation.setInformativeText("Внимание: завершение процесса может привести к нестабильной работе системы.")
+            confirmation.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No)
+            confirmation.setDefaultButton(QtWidgets.QMessageBox.No)
+            
+            # Если пользователь выбрал "Да", завершаем процесс
+            if confirmation.exec() == QtWidgets.QMessageBox.Yes:
+                try:
+                    p = psutil.Process(self.selected_pid)
+                    p.terminate()
+                    self.update_processes()  # Обновляем таблицу после завершения процесса
+                except Exception as e:
+                    error_message = QtWidgets.QMessageBox()
+                    error_message.setIcon(QtWidgets.QMessageBox.Critical)
+                    error_message.setWindowTitle("Ошибка")
+                    error_message.setText(f"Не удалось завершить процесс `{process_name}` (PID: {self.selected_pid}).")
+                    error_message.setInformativeText(str(e))
+                    error_message.setStandardButtons(QtWidgets.QMessageBox.Ok)
+                    error_message.exec()
 
     def update_processes(self):
+        """Обновляет список процессов в таблице."""
+        # Сохраняем текущий выбранный PID (если есть)
+        previously_selected_pid = self.selected_pid
+
         self.table.setRowCount(0)
         processes = []
 
@@ -591,7 +685,7 @@ class ProcessTab(QWidget):
                 row_position = self.table.rowCount()
                 self.table.insertRow(row_position)
 
-                # Заполняем строку без использования иконок
+                # Заполняем строку
                 self.table.setItem(row_position, 0, QTableWidgetItem(proc.info['name']))
                 self.table.setItem(row_position, 1, QTableWidgetItem(str(proc.info['pid'])))
                 logical_cpus = psutil.cpu_count(logical=True)
@@ -599,6 +693,11 @@ class ProcessTab(QWidget):
                 self.table.setItem(row_position, 2, QTableWidgetItem(f"{normalized_cpu:.2f}%"))
                 self.table.setItem(row_position, 3, QTableWidgetItem(f"{proc.info['memory_percent']:.2f}%"))
                 self.table.setItem(row_position, 4, QTableWidgetItem(proc.info['username']))
+
+                # Восстанавливаем выделение, если PID совпадает
+                if proc.info['pid'] == previously_selected_pid:
+                    self.table.selectRow(row_position)  # Выделяем строку
+                    self.selected_pid = previously_selected_pid  # Сохраняем PID
 
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
@@ -630,7 +729,7 @@ class DiskResourceTab(QWidget):
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.disk_tab_update)
-        self.timer.start(1500)  # Update every 100 ms
+        self.timer.start(1000)  # Update every 1000 ms
 
         self.disk_init()  # Initialize disks
 
@@ -651,9 +750,9 @@ class DiskResourceTab(QWidget):
                         self.disk_type.append('SSD' if 'SSD' in tempparts else 'HDD')
 
             self.num_of_disks = len(self.disk_list)
-            self.disk_active_array = [[0] * 100 for _ in range(self.num_of_disks)]
-            self.disk_read_array = [[0] * 100 for _ in range(self.num_of_disks)]
-            self.disk_write_array = [[0] * 100 for _ in range(self.num_of_disks)]
+            self.disk_active_array = [[0] * 60 for _ in range(self.num_of_disks)]
+            self.disk_read_array = [[0] * 60 for _ in range(self.num_of_disks)]
+            self.disk_write_array = [[0] * 60 for _ in range(self.num_of_disks)]
             self.disk_state1 = [None] * self.num_of_disks
 
             # Get initial disk I/O state
@@ -666,7 +765,6 @@ class DiskResourceTab(QWidget):
 
     def disk_tab_update(self):
         """Function to periodically update DISKs statistics."""
-        disk_usage = psutil.disk_usage('/')
         disk_temp = psutil.disk_io_counters(perdisk=True)
 
         # Updating disk statistics
@@ -678,24 +776,23 @@ class DiskResourceTab(QWidget):
                 # Calculate differences
                 disk_diff = [
                     self.disk_state2.read_bytes - self.disk_state1[i].read_bytes,
-                    self.disk_state2.write_bytes - self.disk_state1[i].write_bytes,
-                    self.disk_state2.busy_time - self.disk_state1[i].busy_time
+                    self.disk_state2.write_bytes - self.disk_state1[i].write_bytes
                 ]
 
                 # Update active utilization percentage
-                active_percentage = int(disk_diff[2] / (0.1 * 100))  # Assuming 100 ms intervals
+                active_percentage = (disk_diff[0] + disk_diff[1]) / 1024  # KB/s total read + write
                 if active_percentage > 100:
                     active_percentage = 100
 
                 # Update labels
                 self.disk_name_label.setText(f"Название диска: {current_disk}")
                 self.disk_capacity_label.setText(f"Емкость: {self.disk_size[i]}")
-                self.disk_type_label.setText(f"Тип диска: {'SSD' if disk_usage.total < 1e12 else 'HDD'}")
+                self.disk_type_label.setText(f"Тип диска: {'SSD' if active_percentage < 100 else 'HDD'}")
                 self.disk_active_array[i].pop(0)
                 self.disk_active_array[i].append(active_percentage)
 
                 self.disk_read_array[i].pop(0)
-                self.disk_read_array[i].append(disk_diff[0] / 1024)  # Convert to KB
+                self.disk_read_array[i].append(disk_diff[0] / 1024)  # Convert to KB/s
 
                 self.disk_write_array[i].pop(0)
                 self.disk_write_array[i].append(disk_diff[1] / 1024)
@@ -713,14 +810,19 @@ class DiskResourceTab(QWidget):
         """Обновление графика для указанного диска."""
         self.figure.clear()
         ax = self.figure.add_subplot(111)
-        # Построение графика слева направо
+        ax.set_facecolor('white')
+
         ax.fill_between(range(len(self.disk_read_array[index])), self.disk_read_array[index], color='lightgreen', alpha=0.5, label='Чтение (KB/s)')
         ax.plot(self.disk_read_array[index], label='Чтение (KB/s)', color='green')
         ax.plot(self.disk_write_array[index], label='Запись (KB/s)', color='red')
 
         # Задание пределов Y оси для корректной визуализации
         ax.set_ylim(0, max(max(self.disk_read_array[index], default=0), max(self.disk_write_array[index], default=0)) * 1.1)
+        ax.set_xlim(0, len(self.disk_read_array[index]) - 1)
 
+        # Настройка оси X: справа налево (от старых к новым)
+        ax.set_xticks(range(0, 60, 10))
+        ax.set_xticklabels(["1 мин", "50 сек", "40 сек", "30 сек", "20 сек", "10 сек"])
         # Настройка заголовков и легенды
         ax.set_title('Скорость чтения и записи диска')
         ax.set_xlabel('Время (секунды)')
@@ -730,6 +832,7 @@ class DiskResourceTab(QWidget):
 
         # Отображение обновленного графика
         self.canvas.draw()
+
 
 
 if __name__ == "__main__":
