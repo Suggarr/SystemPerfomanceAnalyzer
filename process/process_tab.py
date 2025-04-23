@@ -27,7 +27,7 @@ class ProcessTab(QWidget):
 
     def setup_table(self):
         self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Process", "PID", "CPU Usage (%)", "Memory Usage (%)", "User"])
+        self.table.setHorizontalHeaderLabels(["Процесс", "PID", "Использование CPU (%)", "Использование памяти (%)", "Пользователь"])
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         self.table.setColumnWidth(0, 180)
