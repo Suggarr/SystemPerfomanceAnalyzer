@@ -3,6 +3,7 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QLabel, QVBoxLayout, QTableWidget, QTableWidgetItem, QMenu, QWidget, QDialog, QTabWidget
 )
+from pathlib import Path
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from os import popen
@@ -39,9 +40,10 @@ class DiskResourceTab(QWidget):
 
         self.disk_init()  # Initialize disks
 
+    from pathlib import Path
+
     def disk_init(self):
         """Initialization of the Disk Components."""
-        # Getting the name and size of the disks using shell command
         try:
             p = popen('lsblk -d | grep -e ^NAME -e disk')
             partitions = p.readlines()
@@ -49,11 +51,17 @@ class DiskResourceTab(QWidget):
             for parts in partitions:
                 tempparts = parts.split()
                 if 'NAME' not in tempparts[0] and 'zram' not in tempparts[0]:
-                    self.disk_list.append(tempparts[0])
+                    disk_name = tempparts[0]
+                    self.disk_list.append(disk_name)
                     self.disk_size.append(tempparts[3])
-                    # Determine disk type
-                    if 'sd' in tempparts[0]:  # Simplified check for SSD
-                        self.disk_type.append('SSD' if 'SSD' in tempparts else 'HDD')
+                    # Определение типа диска (HDD/SSD)
+                    rotational_path = Path(f"/sys/block/{disk_name}/queue/rotational")
+                    if rotational_path.exists():
+                        with rotational_path.open("r") as f:
+                            rotational = f.read().strip()
+                            self.disk_type.append("SSD" if rotational == "0" else "HDD")
+                    else:
+                        self.disk_type.append("Unknown")
 
             self.num_of_disks = len(self.disk_list)
             self.disk_active_array = [[0] * 60 for _ in range(self.num_of_disks)]
@@ -93,7 +101,7 @@ class DiskResourceTab(QWidget):
                 # Update labels
                 self.disk_name_label.setText(f"Название диска: {current_disk}")
                 self.disk_capacity_label.setText(f"Емкость: {self.disk_size[i]}")
-                self.disk_type_label.setText(f"Тип диска: {'SSD' if active_percentage < 100 else 'HDD'}")
+                self.disk_type_label.setText(f"Тип диска: {self.disk_type[i]}")
                 self.disk_active_array[i].pop(0)
                 self.disk_active_array[i].append(active_percentage)
 
