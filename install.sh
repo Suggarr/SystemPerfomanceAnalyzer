@@ -1,11 +1,49 @@
 #!/bin/bash
 
+set -e
+
 VENV_DIR="venv"
+INSTALL_DIR="/opt/system_performance_analyzer"
+DESKTOP_FILE="$HOME/.local/share/applications/system_performance_analyzer.desktop"
 
 install_system_packages() {
     echo "Установка необходимых системных библиотек..."
     sudo apt update
-    sudo apt install -y python3-pyqt6 python3-psutil python3-matplotlib python3-pip cmake cpp designer-qt6 fdisk g++ dpkg dpkg-dev gcc gdisk pciutils pyqt5-dev-tools pyqt6-dev-tools python3 python3.12 python3-cairo python3-dev python3-gi python3-gi-cairo python3-pip python3-pip-whl python3-pyqt-distutils python3-pyqt6 python3-venv time sysstat libqt6svg6-dev libqt6opengl6-dev libjpeg-dev libpng-dev python3-netifaces
+    sudo apt install -y \
+        python3-venv python3-dev python3-pip python3-pyqt6 python3-psutil python3-matplotlib \
+        cmake cpp g++ gcc dpkg dpkg-dev fdisk gdisk pciutils \
+        pyqt5-dev-tools pyqt6-dev-tools \
+        designer-qt6 libqt6svg6-dev libqt6opengl6-dev \
+        python3-gi python3-gi-cairo python3-cairo python3-pyqt-distutils \
+        libjpeg-dev libpng-dev python3-netifaces \
+        time sysstat
+}
+
+copy_application() {
+    echo "Копирование приложения и модулей в $INSTALL_DIR..."
+    sudo mkdir -p "$INSTALL_DIR"
+
+    if [[ ! -f "main.py" ]]; then
+        echo "Ошибка: main.py не найден!" >&2
+        exit 1
+    fi
+    sudo cp main.py "$INSTALL_DIR/"
+    sudo chmod +x "$INSTALL_DIR/main.py"
+
+    for dir in cpu memory process network disk; do
+        if [[ -d "$dir" ]]; then
+            sudo cp -r "$dir" "$INSTALL_DIR/"
+        else
+            echo "Папка $dir отсутствует, пропускаем."
+        fi
+    done
+
+    if [[ ! -f "icon/icon.png" ]]; then
+        echo "Ошибка: icon/icon.png не найден!" >&2
+        exit 1
+    fi
+    sudo mkdir -p "$INSTALL_DIR/icon"
+    sudo cp icon/icon.png "$INSTALL_DIR/icon/"
 }
 
 create_virtualenv() {
@@ -13,68 +51,71 @@ create_virtualenv() {
     python3 -m venv "$VENV_DIR"
     source "$VENV_DIR/bin/activate"
 
-    if [ -f "requirements.txt" ]; then
-        pip install -r requirements.txt
-    else
-        echo "Файл requirements.txt отсутствует. Проверьте перед установкой."
+    if [[ ! -f "requirements.txt" ]]; then
+        echo "Файл requirements.txt отсутствует!" >&2
+        deactivate
         exit 1
     fi
+
+    pip install --upgrade pip
+    pip install -r requirements.txt
+
+    deactivate
+    sudo cp -r "$VENV_DIR" "$INSTALL_DIR/"
 }
 
 create_shortcut() {
     echo "Создание ярлыка для приложения..."
 
-    if [ ! -d "$HOME/.local/share/applications" ]; then
-        mkdir -p "$HOME/.local/share/applications"
+    # Проверяем, существует ли уже файл ярлыка
+    if [[ -f "$DESKTOP_FILE" ]]; then
+        echo "Ярлык уже существует, пропускаем создание."
+        return
     fi
 
-    cat <<EOF > "$HOME/.local/share/applications/system_performance_analyzer.desktop"
+    mkdir -p "$(dirname "$DESKTOP_FILE")"
+
+    cat <<EOF > "$DESKTOP_FILE"
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=System Performance Analyzer
-Exec=$(pwd)/$VENV_DIR/bin/python /opt/system_performance_analyzer/main.py
-Icon=/opt/system_performance_analyzer/icon/icon.png
+Exec=$INSTALL_DIR/venv/bin/python $INSTALL_DIR/main.py
+Icon=$INSTALL_DIR/icon/icon.png
 Terminal=false
 Categories=Utility;
 EOF
 
-    chmod +x "$HOME/.local/share/applications/system_performance_analyzer.desktop"
+    chmod +x "$DESKTOP_FILE"
 }
 
-copy_application() {
-    echo "Копирование приложения и модулей в /opt/system_performance_analyzer..."
+create_terminal_command() {
+    echo "Создание команды system_performance_analyzer в /usr/local/bin..."
 
-    sudo mkdir -p /opt/system_performance_analyzer
-
-    if [ -f "main.py" ]; then
-        sudo cp main.py /opt/system_performance_analyzer/
-        sudo chmod +x /opt/system_performance_analyzer/main.py
-    else
-        echo "Ошибка: Файл main.py отсутствует!"
-        exit 1
+    # Проверяем, существует ли уже команда
+    if [[ -f "/usr/local/bin/system_performance_analyzer" ]]; then
+        echo "Команда уже существует, пропускаем создание."
+        return
     fi
 
-    for dir in cpu memory process network disk; do
-        if [ -d "$dir" ]; then
-            sudo cp -r "$dir" /opt/system_performance_analyzer/
-        else
-            echo "Внимание: Папка $dir отсутствует, пропускаем."
-        fi
-    done
+    sudo tee /usr/local/bin/system_performance_analyzer > /dev/null <<EOF
+#!/bin/bash
+source "$INSTALL_DIR/venv/bin/activate"
+python "$INSTALL_DIR/main.py"
+EOF
 
-    if [ -f "icon/icon.png" ]; then
-        sudo mkdir -p /opt/system_performance_analyzer/icon
-        sudo cp icon/icon.png /opt/system_performance_analyzer/icon/
-    else
-        echo "Ошибка: Файл icon/icon.png отсутствует!"
-        exit 1
-    fi
+    sudo chmod +x /usr/local/bin/system_performance_analyzer
 }
 
-install_system_packages
-copy_application
-create_virtualenv
-create_shortcut
+main() {
+    install_system_packages
+    copy_application
+    create_virtualenv
+    create_shortcut
+    create_terminal_command
 
-echo "Установка завершена!"
+    echo "Установка завершена!"
+    echo "Запустите программу из меню или командой: system_performance_analyzer"
+}
+
+main
